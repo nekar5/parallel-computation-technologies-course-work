@@ -1,6 +1,8 @@
 import java.awt.geom.Point2D;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
+import java.util.concurrent.*;
 
 public class GradientDescentTests {
     private static final double ALPHA = 0.01; // learning rate
@@ -10,35 +12,6 @@ public class GradientDescentTests {
     private static final int NUM_POINTS = 1000000;
 
     public static void main(String[] args) {
-
-        /**
-         // Generate random data
-         ArrayList<Point2D> data = generateData(NUM_POINTS);
-
-         // Run ordinary gradient descent
-         long startTime = System.currentTimeMillis();
-         double[] thetaSequential = gradientDescentSequential(data);
-         long endTime = System.currentTimeMillis();
-         long sequentialExecutionTime = endTime - startTime;
-
-         // Run parallel gradient descent
-         startTime = System.currentTimeMillis();
-         double[] thetaParallel = gradientDescentParallel(data);
-         endTime = System.currentTimeMillis();
-         long parallelExecutionTime = endTime - startTime;
-
-         // Print results
-         System.out.println("Sequential Gradient Descent:");
-         System.out.println("Theta0: " + thetaSequential[0] + ", Theta1: " + thetaSequential[1]);
-         System.out.println("Norm: " + calculateGradientNorm(thetaSequential));
-         System.out.println("Execution Time: " + sequentialExecutionTime + " ms");
-         System.out.println();
-
-         System.out.println("Parallel Gradient Descent:");
-         System.out.println("Theta0: " + thetaParallel[0] + ", Theta1: " + thetaParallel[1]);
-         System.out.println("Norm: " + calculateGradientNorm(thetaParallel));
-         System.out.println("Execution Time: " + parallelExecutionTime + " ms");
-         */
 
         for(int i=1000000; i<=100000000; i*=10){
             // Generate random data
@@ -66,14 +39,14 @@ public class GradientDescentTests {
             System.out.println();
         }
     }
-
     private static ArrayList<Point2D> generateData(int numPoints) {
         ArrayList<Point2D> data = new ArrayList<>();
         Random random = new Random();
 
         for (int i = 0; i < numPoints; i++) {
             double x = random.nextDouble();
-            double y = 2.0 * x + random.nextGaussian() * 0.2;
+            //double y = 2.0 * x + random.nextGaussian() * 0.2;
+            double y = random.nextDouble(0.1,3.0) * x + random.nextGaussian() * 0.2;
 
             data.add(new Point2D.Double(x, y));
         }
@@ -88,7 +61,7 @@ public class GradientDescentTests {
         return Math.sqrt(dx * dx + dy * dy);
     }
 
-    private static double calculateError(double x, double y, double theta0, double theta1){
+    private static double calculateError(double x, double y, double theta0, double theta1) {
         double hypothesis = theta0 + theta1 * x;
         return hypothesis - y;
     }
@@ -117,11 +90,6 @@ public class GradientDescentTests {
             theta0 -= ALPHA * delta0;
             theta1 -= ALPHA * delta1;
 
-            /**
-             if (Math.abs(delta0) < EPSILON && Math.abs(delta1) < EPSILON) {
-             break;
-             }
-             */
             // Calculate gradient norm
             double gradientNorm = calculateGradientNorm(new double[]{delta0, delta1});
 
@@ -135,8 +103,7 @@ public class GradientDescentTests {
     }
 
     private static double[] gradientDescentParallel(ArrayList<Point2D> data) {
-        double theta0 = 0.0;
-        double theta1 = 0.0;
+        double[] theta = {0.0,0.0};
 
         int m = data.size();
 
@@ -145,42 +112,55 @@ public class GradientDescentTests {
             double sum1 = 0.0;
 
             // Split the data into equal chunks for parallel processing
-            int numThreads = NUM_THREADS;
-            int chunkSize = m / numThreads;
+            int chunkSize = m / NUM_THREADS;
 
-            Thread[] threads = new Thread[numThreads];
-            GradientDescentWorker[] workers = new GradientDescentWorker[numThreads];
+            ExecutorService executor = Executors.newFixedThreadPool(NUM_THREADS);
+            List<Future<GradientDescentResult>> futures = new ArrayList<>();
 
-            for (int i = 0; i < numThreads; i++) {
+            for (int i = 0; i < NUM_THREADS; i++) {
                 int startIndex = i * chunkSize;
-                int endIndex = (i == numThreads - 1) ? m : (i + 1) * chunkSize;
+                int endIndex = (i == NUM_THREADS - 1) ? m : (i + 1) * chunkSize;
 
-                workers[i] = new GradientDescentWorker(data, startIndex, endIndex, theta0, theta1);
-                threads[i] = new Thread(workers[i]);
-                threads[i].start();
+                futures.add(executor.submit(() -> {
+                    double localSum0 = 0.0;
+                    double localSum1 = 0.0;
+
+                    for (int j = startIndex; j < endIndex; j++) {
+                        double x = data.get(j).getX();
+                        double error = calculateError(x, data.get(j).getY(), theta[0], theta[1]);
+
+                        localSum0 += error;
+                        localSum1 += error * x;
+                    }
+
+                    return new GradientDescentResult(localSum0, localSum1);
+                }));
             }
 
+            executor.shutdown();
+
             try {
-                for (int i = 0; i < numThreads; i++) {
-                    threads[i].join();
-                    sum0 += workers[i].getSum0();
-                    sum1 += workers[i].getSum1();
-                }
+                executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
             } catch (InterruptedException e) {
                 e.printStackTrace();
+            }
+
+            for (Future<GradientDescentResult> future : futures) {
+                try {
+                    GradientDescentResult result = future.get();
+                    sum0 += result.sum0;
+                    sum1 += result.sum1;
+                } catch (InterruptedException | ExecutionException e) {
+                    e.printStackTrace();
+                }
             }
 
             double delta0 = sum0 / m;
             double delta1 = sum1 / m;
 
-            theta0 -= ALPHA * delta0;
-            theta1 -= ALPHA * delta1;
+            theta[0] -= ALPHA * delta0;
+            theta[1] -= ALPHA * delta1;
 
-            /**
-             if (Math.abs(delta0) < EPSILON && Math.abs(delta1) < EPSILON) {
-             break;
-             }
-             */
             // Calculate gradient norm
             double gradientNorm = calculateGradientNorm(new double[]{delta0, delta1});
 
@@ -190,46 +170,9 @@ public class GradientDescentTests {
             }
         }
 
-        return new double[]{theta0, theta1};
+        return theta;
     }
 
-    private static class GradientDescentWorker implements Runnable {
-        private final ArrayList<Point2D> data;
-        private final int startIndex;
-        private final int endIndex;
-        private final double theta0;
-        private final double theta1;
-        private double sum0;
-        private double sum1;
-
-        public GradientDescentWorker(ArrayList<Point2D> data, int startIndex, int endIndex, double theta0, double theta1) {
-            this.data = data;
-            this.startIndex = startIndex;
-            this.endIndex = endIndex;
-            this.theta0 = theta0;
-            this.theta1 = theta1;
-        }
-
-        @Override
-        public void run() {
-            sum0 = 0.0;
-            sum1 = 0.0;
-
-            for (int i = startIndex; i < endIndex; i++) {
-                double x = data.get(i).getX();
-                double error = calculateError(x, data.get(i).getY(), theta0, theta1);
-
-                sum0 += error;
-                sum1 += error * x;
-            }
-        }
-
-        public double getSum0() {
-            return sum0;
-        }
-
-        public double getSum1() {
-            return sum1;
-        }
+    private record GradientDescentResult(double sum0, double sum1) {
     }
 }
